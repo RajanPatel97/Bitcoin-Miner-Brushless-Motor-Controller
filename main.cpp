@@ -2,7 +2,7 @@
 #include "SHA256.h"
 #include "rtos.h"
 
-#define char_len_max 32
+#define char_len_max 19
 
 //Photointerrupter input pins
 #define I1pin D2
@@ -33,6 +33,7 @@ State   L1  L2  L3
 6       -   -   -
 7       -   -   -
 */
+
 //Drive state to output table
 const int8_t driveTable[] = {0x12,0x18,0x09,0x21,0x24,0x06,0x00,0x00};
 
@@ -41,10 +42,9 @@ const int8_t stateMap[] = {0x07,0x05,0x03,0x04,0x01,0x00,0x02,0x07};
 //const int8_t stateMap[] = {0x07,0x01,0x03,0x02,0x05,0x00,0x04,0x07}; //Alternative if phase order of input or drive is reversed
 
 //Phase lead to make motor spin
-const int8_t lead = 2;  //2 for forwards, -2 for backwards
+int8_t lead = 2;  //2 for forwards, -2 for backwards
 
 //Status LED
-
 DigitalOut led1(LED1);
 
 //Photointerrupter inputs
@@ -71,7 +71,10 @@ enum message_code {
     HASH = 1, //Hash frequency ID
     NONCE = 2, //correct nonce ID
     POSITION = 3, //Starting Rotor ID
-    DECODED = 4 //Decoded message ID
+    NEWTORQUE = 4, //Torque Value ID
+    KEY = 5,        //Key ID
+    ROTATION = 6,   //Rotation ID
+    MAXVELOCITY = 7, //Max Velocity ID
 };
 
 //message structure
@@ -94,13 +97,16 @@ char commInChar[char_len_max]; //array 32 characters length
 uint8_t ptr; //char array pointer
 
 volatile uint64_t newKey; //means value can change between thread calls
-Mutex newKey_mutex; //Stops the value from beng changed during use
+Mutex newKey_mutex; //Stops the value from being changed during use
 
 Thread commOutT; //Output Thread
 Thread commInT; //Input Thread
 
-int pwm_period = 256;
-uint32_t m_torque = pwm_period;
+int pwm_period = 2000;
+uint32_t m_torque = 1000;
+
+float velocity = 0;
+float rotation = 0;
 
 void putMessage(uint8_t code, uint32_t data){
     message_t *pMessage = outMessages.alloc(); //allocated the recieved message to  outmessages
@@ -110,7 +116,7 @@ void putMessage(uint8_t code, uint32_t data){
     }
 
 void commOutFn(){
-    while(1){
+    while(1){ 
         osEvent newEvent = outMessages.get(); //pulls the message
         message_t *pMessage = (message_t*)newEvent.value.p; //assigns the values to pmessage
 
@@ -129,19 +135,20 @@ void commOutFn(){
             case POSITION:
                 pc.printf("Rotor Starting Position: %d\n\r", pMessage->data); //outputs starting position
                 break;
-            case DECODED:
-                if (pMessage->data == 0) {
-                    pc.printf("Decoded as R\n\r");
-                }
-                else if (pMessage->data == 1) {
-                    pc.printf("Decoded max_speed S\n\r");
-                }
-                else if (pMessage->data == 2) {
-                    newKey_mutex.lock(); //outputs the key input
-                    pc.printf("Decoded New Key 0x%x\n\r",(uint64_t)newKey);
-                    newKey_mutex.unlock();
-                }
+            case NEWTORQUE:
+                pc.printf("Decoded as T %d\n\r", pMessage->data);
                 break;
+            case ROTATION:
+                pc.printf("Decoded as R %d\n\r", rotation);
+                break;
+            case MAXVELOCITY:
+                pc.printf("Decoded max_velocity %d\n\r", velocity);
+                break;
+            case KEY:
+                newKey_mutex.lock(); //outputs the key input
+                pc.printf("Decoded New Key 0x%x\n\r", pMessage->data);
+                newKey_mutex.unlock();
+                break;  
         }
         outMessages.free(pMessage); //removes the message
     }
@@ -156,42 +163,43 @@ void serialISR(){
 void decode_char(char* buffer, uint8_t index){
 
     if(buffer[index] == 'R'){ //if first value is R rotate cretain number of times
-        putMessage(DECODED,0);
+        putMessage(ROTATION, rotation);
 
     }
     else if(buffer[index] == 'r'){ //if first value is R rotate cretain number of times
-        putMessage(DECODED,0);
+        putMessage(ROTATION, rotation);
 
     }
     else if(buffer[index] == 'V'){ //if first value is V set speed of rotation
-        putMessage(DECODED,1);
+        putMessage(MAXVELOCITY, velocity);
     }
     else if(buffer[index] == 'v'){ //if first value is V set speed of rotation
-        putMessage(DECODED,1);
+        putMessage(MAXVELOCITY, velocity);
     }
     else if (buffer[index] == 'K'){ //if char is K set key to value input
         newKey_mutex.lock();
         sscanf(buffer, "K%10llx", &newKey);
         newKey_mutex.unlock();
-        putMessage(DECODED,2);
+        putMessage(KEY, newKey);
     }
     else if (buffer[index] == 'k'){ //if char is K set key to value input
         newKey_mutex.lock();
         sscanf(buffer, "k%10llx", &newKey);
         newKey_mutex.unlock();
-        putMessage(DECODED,2);
+        putMessage(KEY, newKey);
     }
     else if (buffer[index] == 'T') { //torque test
-        putMessage(DECODED, 4);
-        sscanf(buffer, "T%x", &newKey); //Decode the command and put it to newkey
-        putMessage(DECODED, newKey);
-        m_torque = newKey;
+        newKey_mutex.lock();
+        sscanf(buffer, "T%d", &m_torque);
+        newKey_mutex.unlock();
+        putMessage(NEWTORQUE, m_torque);                
+        
     }
     else if (buffer[index] == 't') { //torque test
-        putMessage(DECODED, 4);
-        sscanf(buffer, "T%x", &newKey); //Decode the command and put it to newkey
-        putMessage(DECODED, newKey);
-        m_torque = newKey;
+        newKey_mutex.lock();
+        sscanf(buffer, "t%d", &m_torque);
+        newKey_mutex.unlock();
+        putMessage(NEWTORQUE, m_torque);   
     }
 
 }
@@ -233,11 +241,11 @@ void motorOut(int8_t driveState, uint32_t t){
     if (~driveOut & 0x20) L3H = 1;
     
     //Then turn on
-    if (driveOut & 0x01) L1L.pulsewidth_us(m_torque);
+    if (driveOut & 0x01) L1L.pulsewidth_us(t);
     if (driveOut & 0x02) L1H = 0;
-    if (driveOut & 0x04) L2L.pulsewidth_us(m_torque);
+    if (driveOut & 0x04) L2L.pulsewidth_us(t);
     if (driveOut & 0x08) L2H = 0;
-    if (driveOut & 0x10) L3L.pulsewidth_us(m_torque);
+    if (driveOut & 0x10) L3L.pulsewidth_us(t);
     if (driveOut & 0x20) L3H = 0;
     }
 
