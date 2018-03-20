@@ -2,7 +2,7 @@
 #include "SHA256.h"
 #include "rtos.h"
 
-#define char_len_max 19
+#define char_len_max 18
 
 //Photointerrupter input pins
 #define I1pin D2
@@ -75,6 +75,8 @@ enum message_code {
     KEY = 5,        //Key ID
     ROTATION = 6,   //Rotation ID
     MAXVELOCITY = 7, //Max Velocity ID
+    VELREP = 8,
+    POSREP = 9
 };
 
 //message structure
@@ -99,14 +101,17 @@ uint8_t ptr; //char array pointer
 volatile uint64_t newKey; //means value can change between thread calls
 Mutex newKey_mutex; //Stops the value from being changed during use
 
-Thread commOutT; //Output Thread
-Thread commInT; //Input Thread
+Thread commOutT(osPriorityNormal, 512);; //Output Thread
+Thread commInT (osPriorityNormal, 512);; //Input Thread
 
 int pwm_period = 2000;
 uint32_t m_torque = 1000;
 
-float velocity = 0;
-float rotation = 0;
+volatile int32_t targetVelocity = 0x100;
+volatile int32_t velocity = 0;
+volatile float newRotation = 0;
+uint32_t old_time = 0;
+
 
 void putMessage(uint8_t code, uint32_t data){
     message_t *pMessage = outMessages.alloc(); //allocated the recieved message to  outmessages
@@ -139,16 +144,22 @@ void commOutFn(){
                 pc.printf("Decoded as T %d\n\r", pMessage->data);
                 break;
             case ROTATION:
-                pc.printf("Decoded as R %d\n\r", rotation);
+                pc.printf("Decoded as R %d\n\r", newRotation);
                 break;
             case MAXVELOCITY:
-                pc.printf("Decoded max_velocity %d\n\r", velocity);
+                pc.printf("Decoded max_velocity %d\n\r", targetVelocity);
                 break;
             case KEY:
                 newKey_mutex.lock(); //outputs the key input
                 pc.printf("Decoded New Key 0x%x\n\r", pMessage->data);
                 newKey_mutex.unlock();
-                break;  
+                break;
+            case VELREP:
+                pc.printf("Current Velocity %d\n\r", pMessage->data);
+                break;
+            case POSREP:
+                pc.printf("Motor Position %d\n\r", pMessage->data);
+                break;
         }
         outMessages.free(pMessage); //removes the message
     }
@@ -163,18 +174,18 @@ void serialISR(){
 void decode_char(char* buffer, uint8_t index){
 
     if(buffer[index] == 'R'){ //if first value is R rotate cretain number of times
-        putMessage(ROTATION, rotation);
+        putMessage(ROTATION, newRotation);
 
     }
     else if(buffer[index] == 'r'){ //if first value is R rotate cretain number of times
-        putMessage(ROTATION, rotation);
+        putMessage(ROTATION, newRotation );
 
     }
     else if(buffer[index] == 'V'){ //if first value is V set speed of rotation
-        putMessage(MAXVELOCITY, velocity);
+        putMessage(MAXVELOCITY, targetVelocity);
     }
     else if(buffer[index] == 'v'){ //if first value is V set speed of rotation
-        putMessage(MAXVELOCITY, velocity);
+        putMessage(MAXVELOCITY, targetVelocity);
     }
     else if (buffer[index] == 'K'){ //if char is K set key to value input
         newKey_mutex.lock();
@@ -289,6 +300,54 @@ void init() {
     L3L.period_us(pwm_period);
 }
 
+Thread motorCtrlT (osPriorityNormal, 512);
+
+void motorCtrlTick(){
+    motorCtrlT.signal_set(0x1);    
+}
+
+void motorCtrlFn(){
+    //putMessage(err, 0x5);
+    Ticker motorCtrlTicker;
+    motorCtrlTicker.attach_us(&motorCtrlTick, 100000);
+    static int32_t oldMotorPosition;
+    uint8_t iterations = 0;
+    uint32_t ten_iter_time = 0;
+    Timer timer;
+    timer.start();
+    while(1){
+        motorCtrlT.signal_wait(0x1);
+        uint32_t current_time = timer.read();
+        ten_iter_time = current_time - old_time;
+        old_time = current_time;
+        iterations = (iterations + 1)% 10;
+        if (!iterations) {
+            //putMessage(positionReport, motorPosition);
+            //putMessage(err, motorPosition);
+            int32_t currPosition = motorPosition;
+            velocity = (currPosition - oldMotorPosition) * ten_iter_time;
+            oldMotorPosition = currPosition;
+            old_time = current_time;
+            iterations = 0;
+            putMessage(VELREP, velocity);
+            putMessage(POSREP, currPosition);
+        }
+        // Proportional control with k_p = 10
+        //motorTorque = 20 * (targetVelocity - abs(velocity));
+    
+    /*
+        if (motorTorque < 0){
+            motorTorque = -motorTorque;
+            lead = -2;
+        } else {
+            lead = 2;
+        }
+        if (motorTorque > 1000) motorTorque = 1000;
+    */
+    }
+}
+
+
 //Main
 int main(){
     pc.printf("Hello\n\r"); //outputs hello when turned on
@@ -311,6 +370,7 @@ int main(){
     
     Ticker hashcounter;
     hashcounter.attach(&do_hashcount, 1.0);
+    motorCtrlT.start(motorCtrlFn);
 
     while (1) {
         newKey_mutex.lock(); //stops value from being changed
