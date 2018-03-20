@@ -101,16 +101,17 @@ uint8_t ptr; //char array pointer
 volatile uint64_t newKey; //means value can change between thread calls
 Mutex newKey_mutex; //Stops the value from being changed during use
 
-Thread commOutT(osPriorityNormal, 512);; //Output Thread
-Thread commInT (osPriorityNormal, 512);; //Input Thread
+Thread commOutT(osPriorityNormal, 1024);; //Output Thread
+Thread commInT (osPriorityNormal, 1024);; //Input Thread
 
 int pwm_period = 2000;
-uint32_t m_torque = 1000;
+int32_t m_torque = 1000;
 
 volatile int32_t targetVelocity = 0x100;
-volatile int32_t velocity = 0;
+volatile int32_t  velocity = 0;
 volatile float newRotation = 0;
 uint32_t old_time = 0;
+int8_t kp = 20;
 
 
 void putMessage(uint8_t code, uint32_t data){
@@ -144,10 +145,10 @@ void commOutFn(){
                 pc.printf("Decoded as T %d\n\r", pMessage->data);
                 break;
             case ROTATION:
-                pc.printf("Decoded as R %d\n\r", newRotation);
+                pc.printf("Decoded as R %d\n\r",  pMessage->data);
                 break;
             case MAXVELOCITY:
-                pc.printf("Decoded max_velocity %d\n\r", targetVelocity);
+                pc.printf("Decoded max_velocity %d\n\r", pMessage->data);
                 break;
             case KEY:
                 newKey_mutex.lock(); //outputs the key input
@@ -174,17 +175,21 @@ void serialISR(){
 void decode_char(char* buffer, uint8_t index){
 
     if(buffer[index] == 'R'){ //if first value is R rotate cretain number of times
+        sscanf(buffer, "R%f", &newRotation);
         putMessage(ROTATION, newRotation);
 
     }
     else if(buffer[index] == 'r'){ //if first value is R rotate cretain number of times
-        putMessage(ROTATION, newRotation );
+         sscanf(buffer, "r%f", &newRotation);
+        putMessage(ROTATION, newRotation);
 
     }
     else if(buffer[index] == 'V'){ //if first value is V set speed of rotation
+        sscanf(buffer, "V%d", &targetVelocity);
         putMessage(MAXVELOCITY, targetVelocity);
     }
     else if(buffer[index] == 'v'){ //if first value is V set speed of rotation
+        sscanf(buffer, "v%d", &targetVelocity);
         putMessage(MAXVELOCITY, targetVelocity);
     }
     else if (buffer[index] == 'K'){ //if char is K set key to value input
@@ -277,6 +282,14 @@ int8_t motorHome() {
 
 int32_t motorPosition;
 void ISR(){
+    /*if (m_torque < 0){
+          m_torque = -m_torque;
+            lead = -2;
+        } else {
+            lead = 2;
+        }
+       */ 
+    if (m_torque > 1000) m_torque = 1000;
     static int8_t oldRotorState;
     int8_t rotorState = readRotorState(); //reads motor position
     motorOut((rotorState-orState+lead+6)%6, m_torque); //+6 to make sure the remainder is positive
@@ -300,50 +313,68 @@ void init() {
     L3L.period_us(pwm_period);
 }
 
-Thread motorCtrlT (osPriorityNormal, 512);
+Thread motorCtrlT (osPriorityNormal, 1536);
 
 void motorCtrlTick(){
     motorCtrlT.signal_set(0x1);    
 }
 
+#define sgn(x) ((x)/abs(x))
+#define max(x,y) (x>=y?x:y)
+#define min(x,y) (x>=y?y:x)
+
 void motorCtrlFn(){
+    int32_t ys, yr;
     //putMessage(err, 0x5);
     Ticker motorCtrlTicker;
     motorCtrlTicker.attach_us(&motorCtrlTick, 100000);
-    static int32_t oldMotorPosition;
+    static int32_t oldMotorPosition = 0;
     uint8_t iterations = 0;
     uint32_t ten_iter_time = 0;
     Timer timer;
     timer.start();
+    float err_old = 0.0f;
     while(1){
         motorCtrlT.signal_wait(0x1);
         uint32_t current_time = timer.read();
         ten_iter_time = current_time - old_time;
         old_time = current_time;
         iterations = (iterations + 1)% 10;
+        int32_t currPosition = motorPosition;
+        velocity = (currPosition - oldMotorPosition) / ten_iter_time;
+        oldMotorPosition = currPosition;
+        old_time = current_time;
         if (!iterations) {
             //putMessage(positionReport, motorPosition);
             //putMessage(err, motorPosition);
-            int32_t currPosition = motorPosition;
-            velocity = (currPosition - oldMotorPosition) * ten_iter_time;
-            oldMotorPosition = currPosition;
-            old_time = current_time;
-            iterations = 0;
             putMessage(VELREP, velocity);
             putMessage(POSREP, currPosition);
+            putMessage(NEWTORQUE, m_torque);
         }
-        // Proportional control with k_p = 10
-        //motorTorque = 20 * (targetVelocity - abs(velocity));
-    
-    /*
-        if (motorTorque < 0){
-            motorTorque = -motorTorque;
+        // Proportional control with k_p = 25
+        float err = newRotation - (currPosition/6.0f);
+        float dedt = err - err_old;
+        err_old = err;
+        ys = (int32_t) (kp * (targetVelocity - abs(velocity))) * sgn(err);
+        // TODO make these parameters variables
+        yr = (int32_t) 25 * err + 20 * dedt;
+        if (velocity < 0) m_torque = max(ys, yr);
+        else m_torque = min(ys, yr);
+        if (m_torque < 0){
+            m_torque = -m_torque;
             lead = -2;
         } else {
             lead = 2;
         }
-        if (motorTorque > 1000) motorTorque = 1000;
-    */
+        if (m_torque > 1000) m_torque = 1000;
+    
+    
+    
+    
+    
+    
+    
+    ISR();
     }
 }
 
