@@ -9,7 +9,6 @@
 
 using namespace std;
 
-
 #define char_len_max 18
 
 //Photointerrupter input pins
@@ -114,13 +113,14 @@ Thread commInT (osPriorityNormal, 1024);; //Input Thread
 
 int pwm_period = 2000;
 int32_t m_torque = 1000;
-
-volatile int32_t targetVelocity = 0x100;
-volatile int32_t  velocity = 0;
-volatile float newRotation = 0;
 uint32_t old_time = 0;
-int8_t kp = 20;
 
+volatile int32_t targetVelocity = 0x014; //256
+volatile float newRotation = 500;
+
+int8_t kp1 = 10;
+int8_t kp2 = 20;
+int8_t kd = 10;
 
 void putMessage(uint8_t code, uint32_t data){
     message_t *pMessage = outMessages.alloc(); //allocated the recieved message to  outmessages
@@ -164,7 +164,7 @@ void commOutFn(){
                 newKey_mutex.unlock();
                 break;
             case VELREP:
-                pc.printf("Current Velocity %d\n\r", pMessage->data);
+                pc.printf("Velocity:\t%.1f\n\r",(float)((int32_t)pMessage->data / 6));
                 break;
             case POSREP:
                 pc.printf("Motor Position %d\n\r", pMessage->data);
@@ -290,14 +290,6 @@ int8_t motorHome() {
 
 int32_t motorPosition;
 void ISR(){
-    /*if (m_torque < 0){
-          m_torque = -m_torque;
-            lead = -2;
-        } else {
-            lead = 2;
-        }
-       */ 
-    if (m_torque > 1000) m_torque = 1000;
     static int8_t oldRotorState;
     int8_t rotorState = readRotorState(); //reads motor position
     motorOut((rotorState-orState+lead+6)%6, m_torque); //+6 to make sure the remainder is positive
@@ -327,63 +319,85 @@ void motorCtrlTick(){
     motorCtrlT.signal_set(0x1);    
 }
 
-#define sgn(x) ((x)/abs(x))
-#define max(x,y) (x>=y?x:y)
-#define min(x,y) (x>=y?y:x)
-
 void motorCtrlFn(){
     int32_t ys, yr;
+    int32_t  velocity = 0;
+    
     //putMessage(err, 0x5);
     Ticker motorCtrlTicker;
     motorCtrlTicker.attach_us(&motorCtrlTick, 100000);
+    
     static int32_t oldMotorPosition = 0;
     uint8_t iterations = 0;
     uint32_t ten_iter_time = 0;
-    Timer timer;
-    timer.start();
     float err_old = 0.0f;
+    float err;
+    float dedt;
+    int32_t torque;
+    
+    //Timer timer;
+    //timer.start();
+    
     while(1){
         motorCtrlT.signal_wait(0x1);
         vlo_vector.push_back(velocity);
-        uint32_t current_time = timer.read();
-        ten_iter_time = current_time - old_time;
-        old_time = current_time;
-        iterations = (iterations + 1)% 10;
+        
+        //uint32_t current_time = timer.read();
+       // ten_iter_time = current_time - old_time;
+        //old_time = current_time;
+        
         int32_t currPosition = motorPosition;
-        velocity = (currPosition - oldMotorPosition) / ten_iter_time;
+        velocity = (currPosition - oldMotorPosition)*10;
         oldMotorPosition = currPosition;
-        old_time = current_time;
+       
+        iterations = (iterations + 1)% 10;
         if (!iterations) {
-            //putMessage(positionReport, motorPosition);
-            //putMessage(err, motorPosition);
             putMessage(VELREP, velocity);
             putMessage(POSREP, currPosition);
             putMessage(NEWTORQUE, m_torque);
-        }
+            }
+       
         // Proportional control with k_p = 25
-        float err = newRotation - (currPosition/6.0f);
-        float dedt = err - err_old;
+        err = newRotation - currPosition/6.0f;
+        dedt = err - err_old;
         err_old = err;
-        ys = (int32_t) (kp * (targetVelocity - abs(velocity))) * sgn(err);
-        // TODO make these parameters variables
-        yr = (int32_t) 25 * err + 20 * dedt;
-        if (velocity < 0) m_torque = max(ys, yr);
-        else m_torque = min(ys, yr);
-        if (m_torque < 0){
-            m_torque = -m_torque;
-            lead = -2;
-        } else {
-            lead = 2;
+       
+        int32_t s = targetVelocity * 6;
+        
+        if (s == 0) {                       // set to max if V0
+            ys = pwm_period;    // theoretical max speed: 66.7
+        } else {                            // calculate as normal
+            ys = (int32_t)(kp1 * ( s - abs(velocity)));
         }
-        if (m_torque > 1000) m_torque = 1000;
-    
-    
-    
-    
-    
-    
-    
-    ISR();
+        if (err < 0) ys = -ys;            // multiply by sgn(err)
+        
+        
+        // TODO make these parameters variables
+        yr = (int32_t) (kp2 * err) + (kd * dedt);
+       
+         /* torque: choose y_r or y_s
+           y = max(y_s, y_r), v <  0
+               min(y_s, y_r), v >= 0 */
+        if (((velocity < 0) && (ys > yr)) || ((velocity >= 0) && (ys < yr))) {
+            torque = ys;
+        } else {
+            torque = yr;
+        }
+        
+        // direction
+        if (torque > 0) {
+            lead = 2;
+        } else {
+            torque = -torque;  // torque should be positive
+            lead = -2;         // reverse direction
+        }
+        if (torque > pwm_period)
+            torque = pwm_period; // set max value
+            
+        // output
+        m_torque = torque;   // access motorPower once
+        
+        if (velocity == 0)ISR(); // give jolt if velocity is 0
     }
 }
 
