@@ -124,7 +124,7 @@ int32_t m_torque = 1000;
 uint32_t old_time = 0;
 
 volatile int32_t targetVelocity = 10;
-volatile float targetRotation = 200;
+volatile float targetRotation = 0;
 
 static int8_t kp1 = 10;
 static int8_t kp2 = 20;
