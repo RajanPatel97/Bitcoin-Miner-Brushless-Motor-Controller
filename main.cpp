@@ -104,14 +104,16 @@ Mutex newKey_mutex; //Stops the value from being changed during use
 Thread commOutT(osPriorityNormal, 1024);; //Output Thread
 Thread commInT (osPriorityNormal, 1024);; //Input Thread
 
-int pwm_period = 2000;
-int32_t m_torque = 1000;
-uint32_t old_time = 0;
+int pwm_period = 2000;  //PWM_initialisation
+int32_t m_torque = 1000; // m_torque initialistion, protected as it acts as an atomi variable
+uint32_t old_time = 0;  //old_time initialisation
 
 volatile int32_t targetVelocity = 0x100; //256
-volatile float newRotation = 0;
+volatile float newRotation = 0;   //Writes newRotation to a memory address immediately, and reads from the memory location dircectly every time it is called
 
-int8_t kp1 = 10;
+
+//Coefficient setup for PD parameters
+int8_t kp1 = 10;  
 int8_t kp2 = 20;
 int8_t kd = 10;
 
@@ -122,7 +124,8 @@ void putMessage(uint8_t code, uint32_t data){
     outMessages.put(pMessage);
     }
 
-void commOutFn(){
+
+void commOutFn(){ //Function for outputting messages to the access terminal 
     while(1){ 
         osEvent newEvent = outMessages.get(); //pulls the message
         message_t *pMessage = (message_t*)newEvent.value.p; //assigns the values to pmessage
@@ -143,24 +146,24 @@ void commOutFn(){
                 pc.printf("Rotor Starting Position: %d\n\r", pMessage->data); //outputs starting position
                 break;
             case NEWTORQUE:
-                pc.printf("Decoded as T %d\n\r", pMessage->data);
+                pc.printf("Decoded as T %d\n\r", pMessage->data);  //outputs torque
                 break;
             case ROTATION:
-                pc.printf("Decoded as R %d\n\r",  pMessage->data);
+                pc.printf("Decoded as R %d\n\r",  pMessage->data); //outputs rotation
                 break;
             case MAXVELOCITY:
-                pc.printf("Decoded max_velocity %d\n\r", pMessage->data);
+                pc.printf("Decoded max_velocity %d\n\r", pMessage->data); //outputs maxVelocity
                 break;
             case KEY:
-                newKey_mutex.lock(); //outputs the key input
-                pc.printf("Decoded New Key 0x%x\n\r", pMessage->data);
-                newKey_mutex.unlock();
+                newKey_mutex.lock(); //locks the newKey value while the message is being outputted so it can't be changed
+                pc.printf("Decoded New Key 0x%x\n\r", pMessage->data);  //outputs the key input 
+                newKey_mutex.unlock(); //unlocks, allowing it to be updated again
                 break;
             case VELREP:
-                pc.printf("Velocity:\t%.1f\n\r",(float)((int32_t)pMessage->data / 6));
+                pc.printf("Velocity:\t%.1f\n\r",(float)((int32_t)pMessage->data / 6));  //outputs velocity rep
                 break;
             case POSREP:
-                pc.printf("Motor Position %d\n\r", pMessage->data);
+                pc.printf("Motor Position %d\n\r", pMessage->data);  //outputs position rep
                 break;
         }
         outMessages.free(pMessage); //removes the message
@@ -168,15 +171,15 @@ void commOutFn(){
 }
 
 void serialISR(){
-    uint8_t newChar = pc.getc(); //gets valuee from serial port
-    pc.putc(newChar);
+    uint8_t newChar = pc.getc(); //gets value from serial port
+    pc.putc(newChar);   
     inCharQ.put((void*)newChar); //places into newChar
     }
 
 void decode_char(char* buffer, uint8_t index){
 
     if(buffer[index] == 'R'){ //if first value is R rotate cretain number of times
-        sscanf(buffer, "R%f", &newRotation);
+        sscanf(buffer, "R%f", &newRotation);  
         putMessage(ROTATION, newRotation);
 
     }
@@ -205,14 +208,14 @@ void decode_char(char* buffer, uint8_t index){
         newKey_mutex.unlock();
         putMessage(KEY, newKey);
     }
-    else if (buffer[index] == 'T') { //torque test
+    else if (buffer[index] == 'T') { //torque test if T is char
         newKey_mutex.lock();
         sscanf(buffer, "T%d", &m_torque);
         newKey_mutex.unlock();
         putMessage(NEWTORQUE, m_torque);                
         
     }
-    else if (buffer[index] == 't') { //torque test
+    else if (buffer[index] == 't') { //torque test if t is char
         newKey_mutex.lock();
         sscanf(buffer, "t%d", &m_torque);
         newKey_mutex.unlock();
@@ -221,17 +224,17 @@ void decode_char(char* buffer, uint8_t index){
 
 }
 
-void commInFn(){
+void commInFn(){  //function for parsing input functions read from the access terminal
     pc.printf("Enter your command:\n\r"); //Tells the person to input their message
     pc.attach(&serialISR); //looks for the serialISR to get message
     while(1){
-        if(ptr >= char_len_max){
+        if(ptr >= char_len_max){   
             putMessage(ERROR_C,0); //if gone over the buffer length, cancel and restart for next input
             ptr = 0; //reset pointer
             break;
         }
         osEvent newEvent = inCharQ.get(); //get next character
-        uint8_t newChar = (uint8_t)newEvent.value.p;
+        uint8_t newChar = (uint8_t)newEvent.value.p;  //processes a char of the input stream
         if(newChar != '\r' && newChar != '\n'){
             commInChar[ptr] = newChar; //place values into buffer
             ptr++; //increment pointer
@@ -268,70 +271,70 @@ void motorOut(int8_t driveState, uint32_t t){
 
 //Convert photointerrupter inputs to a rotor state
 inline int8_t readRotorState(){
-    return stateMap[I1 + 2*I2 + 4*I3];
+    return stateMap[I1 + 2*I2 + 4*I3];  
 }
 
 //Basic synchronisation routine
 int8_t motorHome() {
     //Put the motor in drive state 0 and wait for it to stabilise
-    motorOut(0, pwm_period);
+    motorOut(0, pwm_period);  
     wait(2.0);
     
     //Get the rotor state
     return readRotorState();
 }
 
-int32_t motorPosition;
+int32_t motorPosition;  
 void ISR(){
-    static int8_t oldRotorState;
+    static int8_t oldRotorState;  
     int8_t rotorState = readRotorState(); //reads motor position
-    motorOut((rotorState-orState+lead+6)%6, m_torque); //+6 to make sure the remainder is positive
-    if (rotorState - oldRotorState == 5) motorPosition--;
-    else if (rotorState - oldRotorState == -5) motorPosition++;
-    else motorPosition += (rotorState - oldRotorState);
-    oldRotorState = rotorState;
+    motorOut((rotorState-orState+lead+6)%6, m_torque); //+6 to make sure the remainder is positive (6 states in a revolution)
+    if (rotorState - oldRotorState == 5) motorPosition--;  //moves the motor forwards towards the intended position
+    else if (rotorState - oldRotorState == -5) motorPosition++; //moves the motor back if the intended position is overshot, or if the intended position is back
+    else motorPosition += (rotorState - oldRotorState);  
+    oldRotorState = rotorState;  //updates oldrotor state, to initialise it for the next loop
 }
 
-volatile uint16_t hashcount = 0;
+volatile uint16_t hashcount = 0;  //instantly assigns hashcount a memory location and always read directly from the memory address
 
-void do_hashcount() 
+void do_hashcount()  //outputs the hashcount then resets, to begin counting operations again
 {
     putMessage(HASH, hashcount);
     hashcount = 0;
 }
 
-void init() {
+void init() {       //initialisation of timings 
     L1L.period_us(pwm_period);
     L2L.period_us(pwm_period);
     L3L.period_us(pwm_period);
 }
 
-Thread motorCtrlT (osPriorityNormal, 1536);
+Thread motorCtrlT (osPriorityNormal, 1536);  //allocation of thread to a memory space, at normal priority
 
 void motorCtrlTick(){
-    motorCtrlT.signal_set(0x1);    
+    motorCtrlT.signal_set(0x1);    //tickcount value for motorcontrol 
 }
 
-void motorCtrlFn(){
-    int32_t ys, yr;
-    int32_t  velocity = 0;
+void motorCtrlFn(){   //function for motorcontrol
+    int32_t ys, yr;    
+    int32_t  velocity = 0;   //initialising velocity
     
     //putMessage(err, 0x5);
-    Ticker motorCtrlTicker;
-    motorCtrlTicker.attach_us(&motorCtrlTick, 100000);
+    Ticker motorCtrlTicker;    //initialising the ticker
+    motorCtrlTicker.attach_us(&motorCtrlTick, 100000);  
     
-    static int32_t oldMotorPosition = 0;
-    uint8_t iterations = 0;
+    static int32_t oldMotorPosition = 0;    //initialising oldMotorposition, updated in ISR after initialisation
+    uint8_t iterations = 0;   
     uint32_t ten_iter_time = 0;
-    float err_old = 0.0f;
-    float err;
-    float dedt;
-    int32_t torque;
+    float err_old = 0.0f;   
+    float err;   
+    float dedt;   
+    int32_t torque;  
     
     //Timer timer;
     //timer.start();
     
-    while(1){
+    while(1){    //main motorcontrol loop
         motorCtrlT.signal_wait(0x1);
         
         //uint32_t current_time = timer.read();
