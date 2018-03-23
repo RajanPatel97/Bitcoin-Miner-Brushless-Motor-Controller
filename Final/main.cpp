@@ -117,7 +117,7 @@ Mutex newKey_mutex; //Stops the value from being changed during use
 
 Thread commOutT(osPriorityNormal, 1024);; //Output Thread
 Thread commInT (osPriorityNormal, 1024);; //Input Thread
-Thread motorCtrlT (osPriorityNormal, 1536); //MotorControl Thread
+Thread motorCtrlT (osPriorityHigh, 1536); //MotorControl Thread
 
 int32_t pwm_period = 2000;
 int32_t m_torque = 1000;
