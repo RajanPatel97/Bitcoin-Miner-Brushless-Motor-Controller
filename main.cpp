@@ -324,9 +324,9 @@ void motorCtrlFn(){   //function for motorcontrol
     motorCtrlTicker.attach_us(&motorCtrlTick, 100000);  
     
     static int32_t oldMotorPosition = 0;    //initialising oldMotorposition, updated in ISR after initialisation
-    uint8_t iterations = 0;   
-    uint32_t ten_iter_time = 0;
-    float err_old = 0.0f;   
+    uint8_t iterations = 0;       //initialising iteration counts
+    uint32_t ten_iter_time = 0;   
+    float err_old = 0.0f;   //setting starting error, and t-1 error to 0
     float err;   
     float dedt;   
     int32_t torque;  
@@ -335,46 +335,45 @@ void motorCtrlFn(){   //function for motorcontrol
     //timer.start();
     
     while(1){    //main motorcontrol loop
-        motorCtrlT.signal_wait(0x1);
+        motorCtrlT.signal_wait(0x1);    //waits one tick cycle
         
         //uint32_t current_time = timer.read();
        // ten_iter_time = current_time - old_time;
         //old_time = current_time;
         
-        int32_t currPosition = motorPosition;
-        velocity = (currPosition - oldMotorPosition)*10;
-        oldMotorPosition = currPosition;
+        int32_t currPosition = motorPosition;    //stores motor position into currPosition
+        velocity = (currPosition - oldMotorPosition)*10;    //calulates velocity by 'distance travelled' in ticks
+        oldMotorPosition = currPosition;   //updates the t-1 value to the t value to initialise for next loop
        
-        iterations = (iterations + 1)% 10;
+        iterations = (iterations + 1)% 10;  //updates iterations
         if (!iterations) {
             putMessage(VELREP, velocity);
             putMessage(POSREP, currPosition);
-            putMessage(NEWTORQUE, m_torque);
+            putMessage(NEWTORQUE, m_torque);   //pushes through current values for torque, velocity and position to the access terminal
             }
        
         // Proportional control with k_p = 25
-        err = newRotation - currPosition/6.0f;
-        dedt = err - err_old;
-        err_old = err;
+        err = newRotation - currPosition/6.0f;   //calculates and stores error at t
+        dedt = err - err_old;   //works out error change between error and t and t-1
+        err_old = err;    //updates error at t-1 with t ready for next loop
        
-        int32_t s = targetVelocity * 6;
+        int32_t s = targetVelocity * 6;  
         
         if (s == 0) {                       // set to max if V0
             ys = pwm_period;    // theoretical max speed: 66.7
         } else {                            // calculate as normal
-            ys = (int32_t)(kp1 * ( s - abs(velocity)));
+            ys = (int32_t)(kp1 * ( s - abs(velocity)));  //torque calculated from the motor velocity
         }
         if (err < 0) ys = -ys;            // multiply by sgn(err)
         
         
-        // TODO make these parameters variables
-        yr = (int32_t) (kp2 * err) + (kd * dedt);
+        yr = (int32_t) (kp2 * err) + (kd * dedt);    //torque calulated from motor position
        
          /* torque: choose y_r or y_s
            y = max(y_s, y_r), v <  0
                min(y_s, y_r), v >= 0 */
         if (((velocity < 0) && (ys > yr)) || ((velocity >= 0) && (ys < yr))) {
-            torque = ys;
+            torque = ys;   //chooses torque based on the minimum of the two torque values calculated
         } else {
             torque = yr;
         }
@@ -405,7 +404,7 @@ int main(){
     commInT.start(commInFn);
     //Run the motor synchronisation
     orState = motorHome(); //finds staring position
-    putMessage(POSITION,orState);
+    putMessage(POSITION,orState);   //pushs out the state 
 
     //orState is subtracted from future rotor state inputs to align rotor and motor states
     //Poll the rotor state and set the motor outputs accordingly to spin the motor
@@ -417,9 +416,9 @@ int main(){
     I3.fall(&ISR);
     ISR(); //runs the ISR to begin with to start the motor running
     
-    Ticker hashcounter;
-    hashcounter.attach(&do_hashcount, 1.0);
-    motorCtrlT.start(motorCtrlFn);
+    Ticker hashcounter;  //initialises a ticker based on hashcounter
+    hashcounter.attach(&do_hashcount, 1.0); //references back and push hashcount out to access terminal
+    motorCtrlT.start(motorCtrlFn);  //initialises and starts the motorcontrol thread
 
     while (1) {
         newKey_mutex.lock(); //stops value from being changed
@@ -433,6 +432,6 @@ int main(){
         }
 
         *nonce += 1; //increments nonce
-        hashcount++;
+        hashcount++;  //adds a calculation comleted to hash count
     }
 }
