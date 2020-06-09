@@ -14,3 +14,5 @@ Brushless Motor: Brushless motors use pulses of current through motor windings t
 ## Performance
 
 The brushless motor performed well within the limits of precision expected. Efficient code enabled responsive control when setting commands to carry out a certain number of rotations at a defined velocity, where overshoot was the measured metric of performance. In other words, the less the motor overshoots/undershoots the better it performs.  
+
+![](https://github.com/RajanPatel97/Bitcoin-Miner-Brushless-Motor-Controller/blob/master/assets/brushlessMotor.png)
